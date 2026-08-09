@@ -53,15 +53,36 @@ test("noise perturbs but the channel stays seeded-deterministic", () => {
 });
 
 test("corruptSamples jitters cells and flags blend cells", () => {
-  const opts = { ...CLEAN, cellJitter: 10, blendFraction: 0.1 };
+  // blendFraction 0.25 over 4 cells forces nBlend = floor(4·0.25) = 1, so the
+  // blend branch actually executes (0.1 would round to 0 and only the jitter
+  // path would run — the blend→erasure mechanism would be untested).
+  const opts = { ...CLEAN, cellJitter: 10, blendFraction: 0.25 };
   const samples = PALETTE_4.slice();
   const expected = PALETTE_4.slice();
   const { samples: out, blends } = corruptSamples(samples, expected, opts, mulberry32(3));
   assert.equal(out.length, 4);
   assert.equal(blends.length, 4);
-  const blendCount = blends.filter(Boolean).length;
-  assert.ok(blendCount >= 0 && blendCount <= 1, "about 10% of 4 cells");
+  const blendIdx = blends.findIndex(Boolean);
+  assert.ok(blendIdx >= 0, "blendFraction 0.25 over 4 cells must flag a blend cell");
+  // The flagged cell sits at the midpoint of SOME palette pair (midpoint ±
+  // jitter). Searching all pairs keeps the assertion seed-independent.
+  let nearMidpoint = false;
+  for (let a = 0; a < 4 && !nearMidpoint; a++) {
+    for (let b = a + 1; b < 4 && !nearMidpoint; b++) {
+      const mid = {
+        r: (expected[a]!.r + expected[b]!.r) / 2,
+        g: (expected[a]!.g + expected[b]!.g) / 2,
+        b: (expected[a]!.b + expected[b]!.b) / 2,
+      };
+      nearMidpoint =
+        Math.abs(out[blendIdx]!.r - mid.r) <= 12 &&
+        Math.abs(out[blendIdx]!.g - mid.g) <= 12 &&
+        Math.abs(out[blendIdx]!.b - mid.b) <= 12;
+    }
+  }
+  assert.ok(nearMidpoint, "blend cell sits at a palette midpoint");
   for (let i = 0; i < out.length; i++) {
+    if (blends[i]) continue;
     assert.ok(Math.abs(out[i]!.r - samples[i]!.r) <= 12, "jitter bounded");
   }
 });
