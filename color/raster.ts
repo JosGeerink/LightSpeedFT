@@ -34,7 +34,7 @@ export function rasterizeGrid(
   for (let y = 0; y < grid.rows; y++) {
     for (let x = 0; x < grid.cols; x++) {
       const i = y * grid.cols + x;
-      const v = grid.cells[i];
+      const v = grid.cells[i]!;
       const rgb = v === null ? calibrationColor(palette, i) : paletteColor(palette, v);
       const color = opaque(rgb);
       const base = (margin + y * cellPx) * width + margin + x * cellPx;

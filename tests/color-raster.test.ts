@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { colorMaxFrameBytes } from "../shared/frame-capacity.ts";
 import { calibrationColor, decodeFrame, encodeFrame } from "../color/format.ts";
-import { PALETTE_4, paletteColor } from "../color/palette.ts";
+import { PALETTE_4 } from "../color/palette.ts";
 import { rasterizeGrid } from "../color/raster.ts";
 import { sampleGrid } from "../color/sample.ts";
 

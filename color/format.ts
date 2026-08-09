@@ -18,7 +18,7 @@ import {
   type RGB,
 } from "./palette";
 import { applyCcm, fitCcm, neutralCcm } from "./calibrate";
-import { colorDataCells, colorMaxFrameBytes } from "../shared/frame-capacity.ts";
+import { colorDataCells, colorMaxFrameBytes } from "../shared/frame-capacity";
 
 export interface FrameOpts {
   cols: number;
@@ -98,8 +98,6 @@ export function encodeFrame(frameBytes: Uint8Array, opts: FrameOpts): FrameGrid 
   if (frameBytes.length > maxBytes) {
     throw new Error(`frameBytes ${frameBytes.length} exceeds capacity ${maxBytes}`);
   }
-  const k = RS_CODEWORD_LEN - nsym;
-  const nCodewords = Math.ceil(frameBytes.length / k);
   const stream = rsInterleave(frameBytes, nsym);
   const padded = new Uint8Array(dataBytes);
   padded.set(stream);
