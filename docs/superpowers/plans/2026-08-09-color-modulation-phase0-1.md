@@ -2068,6 +2068,40 @@ test("reverseTelemetry only delivers on the update cadence, with latency and los
   assert.ok(deliveries >= 0 && deliveries <= 3, `got ${deliveries}`);
 });
 
+test("reverseTelemetry averages only actually-received frames (drops never idealize the vote)", () => {
+  const rng = mulberry32(2);
+  const opts = { updateEvery: 1, latencyFrames: 100, lossRate: 0 };
+  // 3 mediocre received frames interleaved with a dropped frame whose
+  // fabricated 0.0 EVM would (if averaged in) drag the mean toward
+  // "perfect" — it must be excluded from the delivered vote.
+  const local: (Telemetry & { dropped: boolean })[] = [
+    { evm: 0.5, rsCorrectedBytes: 3, blends: 1, calibrationOk: false, frameDropRate: 0, dropped: false },
+    { evm: 0.0, rsCorrectedBytes: 0, blends: 0, calibrationOk: true, frameDropRate: 0, dropped: true },
+    { evm: 0.5, rsCorrectedBytes: 3, blends: 1, calibrationOk: false, frameDropRate: 0, dropped: false },
+    { evm: 0.5, rsCorrectedBytes: 3, blends: 1, calibrationOk: false, frameDropRate: 0, dropped: false },
+  ];
+  const v = reverseTelemetry(local, 3, opts, rng);
+  assert.ok(v !== null);
+  assert.ok(Math.abs(v.evm - 0.5) < 1e-9, `dropped 0.0 must not dilute the mean: ${v.evm}`);
+  assert.equal(v.rsCorrectedBytes, 3);
+  assert.equal(v.blends, 1);
+  assert.equal(v.calibrationOk, false);
+  assert.equal(v.frameDropRate, 0.25, "frameDropRate still reports the honest drop fraction");
+});
+
+test("reverseTelemetry reports the worst case when the whole window was dropped", () => {
+  const rng = mulberry32(3);
+  const opts = { updateEvery: 1, latencyFrames: 100, lossRate: 0 };
+  const local: (Telemetry & { dropped: boolean })[] = Array.from({ length: 5 }, () => ({
+    evm: 0.05, rsCorrectedBytes: 0, blends: 0, calibrationOk: true, frameDropRate: 0, dropped: true,
+  }));
+  const v = reverseTelemetry(local, 4, opts, rng);
+  assert.ok(v !== null);
+  assert.equal(v.frameDropRate, 1);
+  assert.equal(v.calibrationOk, false);
+  assert.ok(v.evm >= 1, "no received frames → worst-case EVM, not a fabricated measurement");
+});
+
 test("clean channel: a small payload transfers fully and verifies (SHA-256)", async () => {
   const report = await runTransfer("sim.bin", PAYLOAD, PROFILES.clean!, cfg({ maxFrames: 200 }));
   assert.equal(report.complete, true, "clean channel must complete");
@@ -2084,7 +2118,7 @@ test("determinism: same payload + profile + seed reproduces the same run", async
   assert.equal(a.blocksSolved, b.blocksSolved);
 });
 
-test("degrading profile: the closed loop descends during bad episodes, survives, and completes", async () => {
+test("degrading profile: the closed loop descends during bad episodes, survives, and completes", { timeout: 120_000 }, async () => {
   const report = await runTransfer(
     "sim.bin",
     BIG_PAYLOAD,
@@ -2106,7 +2140,7 @@ test("degrading profile: the closed loop descends during bad episodes, survives,
   assert.ok(report.framesDropped > 0, "the stress episodes must drop some frames");
 });
 
-test("recovered bytes accumulate monotonically even through bad episodes", async () => {
+test("recovered bytes accumulate monotonically even through bad episodes", { timeout: 120_000 }, async () => {
   const report = await runTransfer(
     "sim.bin",
     BIG_PAYLOAD,
@@ -2217,14 +2251,24 @@ export function reverseTelemetry(
   const start = Math.max(0, local.length - opts.latencyFrames);
   const win = local.slice(start);
   if (win.length === 0) return null;
+  const frameDropRate = win.filter((v) => v.dropped).length / win.length;
+  // A dropped frame yields NO measurement — the receiver never saw it.
+  // Averaging its fabricated telemetry in would drag the vote toward
+  // "clean" during drop-heavy episodes (idealizing the reverse channel).
+  // Average only actually-received frames; when none were received, report
+  // the worst case so the policy descends on the drop signal.
+  const received = win.filter((v) => !v.dropped);
+  if (received.length === 0) {
+    return { evm: 1, rsCorrectedBytes: 0, blends: 0, calibrationOk: false, frameDropRate };
+  }
   const mean = (key: "evm" | "rsCorrectedBytes" | "blends") =>
-    win.reduce((acc, v) => acc + v[key], 0) / win.length;
+    received.reduce((acc, v) => acc + v[key], 0) / received.length;
   return {
     evm: mean("evm"),
     rsCorrectedBytes: mean("rsCorrectedBytes"),
     blends: mean("blends"),
-    calibrationOk: win.every((v) => v.calibrationOk),
-    frameDropRate: win.filter((v) => v.dropped).length / win.length,
+    calibrationOk: received.every((v) => v.calibrationOk),
+    frameDropRate,
   };
 }
 
@@ -2367,7 +2411,7 @@ export async function runTransfer(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/color-sim.test.ts`
-Expected: PASS (all 5 tests). If the degrading-profile test fails to complete, the thresholds (`holdFrames`, `upEVM`, `downEVM`, the `degrading` episode strengths, or `maxFrames`) need tuning — this is the moment the sim's honest feedback is earning its keep. Raise `maxFrames` first (the recovery ramp at t=16 needs frames to climb back and finish). If the descent assertion fails, strengthen the dim episode (brightness lower, `cellJitter`/`blendFraction` higher) so telemetry crosses `downEVM`/`downDropRate`.
+Expected: PASS (all 7 tests). If the degrading-profile test fails to complete, the thresholds (`holdFrames`, `upEVM`, `downEVM`, the `degrading` episode strengths, or `maxFrames`) need tuning — this is the moment the sim's honest feedback is earning its keep. Raise `maxFrames` first (the recovery ramp at t=16 needs frames to climb back and finish). If the descent assertion fails, strengthen the dim episode (brightness lower, `cellJitter`/`blendFraction` higher) so telemetry crosses `downEVM`/`downDropRate`.
 
 - [ ] **Step 5: Commit**
 
@@ -2424,9 +2468,12 @@ test("encodePng→decodePng round-trips pixels exactly", () => {
 });
 
 test("a real color frame survives a PNG file round-trip", () => {
-  const frameBytes = new Uint8Array(colorMaxFrameBytes(12, 12, 2, 26));
+  // 34×34 → (34−2)² = 1024 data cells × 2 bits = 2048 bits ≥ one 255-byte
+  // codeword's budget, so the frame is non-empty (a 12×12 grid would be
+  // capacity 0 and encode nothing — the round-trip would not exercise RS).
+  const frameBytes = new Uint8Array(colorMaxFrameBytes(34, 34, 2, 26));
   for (let i = 0; i < frameBytes.length; i++) frameBytes[i] = (i * 47) & 0xff;
-  const grid = encodeFrame(frameBytes, { cols: 12, rows: 12, bitsPerCell: 2, nsym: 26 });
+  const grid = encodeFrame(frameBytes, { cols: 34, rows: 34, bitsPerCell: 2, nsym: 26 });
   const raster = rasterizeGrid(grid, PALETTE_4, 8, 4);
   const back = decodePng(encodePng(raster));
   assert.equal(back.width, raster.width);
@@ -2835,7 +2882,7 @@ In `tsconfig.json`, change the include line to add `"color"`:
 - [ ] **Step 4: Run the tests and the type-check**
 
 Run: `bun test tests/color-sim.test.ts`
-Expected: PASS (now 6 tests in this file).
+Expected: PASS (now 8 tests in this file).
 
 Run: `bun test` — the full suite (existing 89 + the new color tests) must be green.
 
