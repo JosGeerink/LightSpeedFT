@@ -935,7 +935,7 @@ import {
   type RGB,
 } from "./palette";
 import { applyCcm, fitCcm, neutralCcm } from "./calibrate";
-import { colorDataCells, colorMaxFrameBytes } from "../shared/frame-capacity.ts";
+import { colorDataCells, colorMaxFrameBytes } from "../shared/frame-capacity";
 
 export interface FrameOpts {
   cols: number;
@@ -1016,7 +1016,8 @@ export function encodeFrame(frameBytes: Uint8Array, opts: FrameOpts): FrameGrid 
     throw new Error(`frameBytes ${frameBytes.length} exceeds capacity ${maxBytes}`);
   }
   const k = RS_CODEWORD_LEN - nsym;
-  const nCodewords = Math.ceil(frameBytes.length / k);
+  // rsInterleave computes its own codeword count internally from
+  // data.length/k; do not shadow it here (noUnusedLocals).
   const stream = rsInterleave(frameBytes, nsym);
   const padded = new Uint8Array(dataBytes);
   padded.set(stream);
@@ -1156,7 +1157,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { colorMaxFrameBytes } from "../shared/frame-capacity.ts";
 import { calibrationColor, decodeFrame, encodeFrame } from "../color/format.ts";
-import { PALETTE_4, paletteColor } from "../color/palette.ts";
+import { PALETTE_4 } from "../color/palette.ts";
 import { rasterizeGrid } from "../color/raster.ts";
 import { sampleGrid } from "../color/sample.ts";
 
@@ -1252,7 +1253,7 @@ export function rasterizeGrid(
   for (let y = 0; y < grid.rows; y++) {
     for (let x = 0; x < grid.cols; x++) {
       const i = y * grid.cols + x;
-      const v = grid.cells[i];
+      const v = grid.cells[i]!;
       const rgb = v === null ? calibrationColor(palette, i) : paletteColor(palette, v);
       const color = opaque(rgb);
       const base = (margin + y * cellPx) * width + margin + x * cellPx;
@@ -1363,8 +1364,8 @@ import {
 } from "../color/sim-channel.ts";
 import { rasterizeGrid } from "../color/raster.ts";
 import { colorMaxFrameBytes } from "../shared/frame-capacity.ts";
-import { encodeFrame, calibrationColor } from "../color/format.ts";
-import { PALETTE_4, paletteColor } from "../color/palette.ts";
+import { encodeFrame } from "../color/format.ts";
+import { PALETTE_4 } from "../color/palette.ts";
 
 test("mulberry32 is deterministic and uniform-ish", () => {
   const a = mulberry32(42);
