@@ -1762,7 +1762,7 @@ export const PROFILES: Record<string, Profile> = {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/color-sim-channel.test.ts`
-Expected: PASS (all 10 tests).
+Expected: PASS (all 9 tests).
 
 - [ ] **Step 5: Commit**
 
