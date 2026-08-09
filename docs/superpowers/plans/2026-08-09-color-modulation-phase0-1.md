@@ -299,9 +299,9 @@ test("GF(256) exp table matches the QR field (primitive poly 0x11D)", () => {
     [8, 0x1d],
     [9, 0x3a],
     [10, 0x74],
-    [40, 0x2a],
-    [99, 0xdf],
-    [100, 0xa3],
+    [40, 0x6a],
+    [99, 0x86],
+    [100, 0x11],
   ];
   for (const [i, expected] of golden) {
     assert.equal(gfPow(i), expected, `α^${i}`);
@@ -454,6 +454,9 @@ export function rsEncode(data: Uint8Array, nsym: number): Uint8Array {
       out[i + j] = out[i + j]! ^ gfMul(g[nsym - j]!, coef);
     }
   }
+  // The LFSR division passes through the data region, clobbering the leading
+  // bytes; restore them so the codeword is systematic ([k data][nsym parity]).
+  out.set(data);
   return out;
 }
 
@@ -473,7 +476,7 @@ function berlekampMassey(s: Uint8Array): { loc: Uint8Array; degree: number } {
   const nsym = s.length;
   const C = new Uint8Array(nsym + 1);
   C[0] = 1;
-  const B = new Uint8Array(nsym + 1);
+  let B = new Uint8Array(nsym + 1);
   B[0] = 1;
   let L = 0;
   let m = 1;
@@ -534,7 +537,6 @@ export function rsDecode(cw: Uint8Array, nsym: number): { data: Uint8Array; corr
   for (const e of errors) {
     const j = 254 - e;
     const X = gfPow(j);
-    const xInv = gfPow(255 - j);
     let om = 0;
     for (let d = 0; d < nsym; d++) om = om ^ gfMul(omega[d]!, gfPow((255 - j) * d));
     // formal derivative: only odd-degree terms survive in characteristic 2
@@ -555,7 +557,7 @@ export function rsDecode(cw: Uint8Array, nsym: number): { data: Uint8Array; corr
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/color-rs.test.ts`
-Expected: PASS (all 7 tests). If the error-boundary test is flaky (miscorrection that happens to be a valid-but-wrong codeword), the assertion `notDeepEqual` still holds — the RS safety net guarantees we never return the *original* data past the bound.
+Expected: PASS (all 6 tests). If the error-boundary test is flaky (miscorrection that happens to be a valid-but-wrong codeword), the assertion `notDeepEqual` still holds — the RS safety net guarantees we never return the *original* data past the bound.
 
 - [ ] **Step 5: Commit**
 
