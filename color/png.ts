@@ -23,6 +23,34 @@ function crc32(bytes: Uint8Array): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
+/** Adler-32 (RFC 1950) over the uncompressed scanline data — the trailer
+ *  every PNG IDAT zlib stream must carry. */
+function adler32(bytes: Uint8Array): number {
+  let a = 1;
+  let b = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    a = (a + bytes[i]!) % 65521;
+    b = (b + a) % 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
+/** PNG IDAT must be a zlib stream (RFC 1950): 2-byte header + deflate +
+ *  Adler-32 trailer. Bun's deflateSync emits RAW deflate (RFC 1951) only —
+ *  a raw IDAT is rejected by conformant decoders (libpng/browsers) — so wrap
+ *  it in the zlib envelope here. 0x78 0x9C = deflate, 32K window, default
+ *  compression, no preset dict (0x789C ≡ 0 mod 31, so the FCHECK is valid). */
+function zlibWrap(raw: Uint8Array): Uint8Array {
+  const deflated = deflateSync(raw);
+  const out = new Uint8Array(2 + deflated.length + 4);
+  out[0] = 0x78;
+  out[1] = 0x9c;
+  out.set(deflated, 2);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(2 + deflated.length, adler32(raw));
+  return out;
+}
+
 function chunk(type: string, data: Uint8Array): Uint8Array {
   const typeBytes = new TextEncoder().encode(type);
   const out = new Uint8Array(8 + data.length + 4);
@@ -63,7 +91,7 @@ export function encodePng(raster: Raster): Uint8Array {
   }
 
   const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-  const out: Uint8Array[] = [sig, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", new Uint8Array(0))];
+  const out: Uint8Array[] = [sig, chunk("IHDR", ihdr), chunk("IDAT", zlibWrap(raw)), chunk("IEND", new Uint8Array(0))];
   let total = 0;
   for (const part of out) total += part.length;
   const merged = new Uint8Array(total);
@@ -101,7 +129,14 @@ export function decodePng(bytes: Uint8Array): Raster {
   }
   if (width === 0 || height === 0 || idat === null) throw new Error("incomplete PNG");
 
-  const raw = inflateSync(idat);
+  // Strip the zlib envelope (2-byte header + 4-byte Adler-32 trailer) before
+  // inflating the raw deflate, and verify the trailer so a corrupt or
+  // non-conformant IDAT fails cleanly instead of decoding to garbage.
+  const raw = inflateSync(idat.subarray(2, idat.length - 4));
+  const idatView = new DataView(idat.buffer, idat.byteOffset, idat.byteLength);
+  if (adler32(raw) !== idatView.getUint32(idat.length - 4)) {
+    throw new Error("PNG IDAT Adler-32 mismatch");
+  }
   const stride = width * 4;
   const pixels = new Uint32Array(width * height);
   for (let y = 0; y < height; y++) {
