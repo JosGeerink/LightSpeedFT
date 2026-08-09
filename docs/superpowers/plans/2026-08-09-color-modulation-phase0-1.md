@@ -611,10 +611,14 @@ test("fitCcm on unperturbed swatches recovers the identity", () => {
 
 test("fitCcm inverts a known global transform", () => {
   // A real-world-ish ISP shift: red scaled 1.25, green dimmed, blue tinted.
+  // Linear only — a 3×3 CCM has no translation term, so an affine offset
+  // cannot be inverted exactly (a +10/+5/+20 offset leaves a ~5-unit residual,
+  // not <0.5). Offsets are absorbed downstream by the brightness-invariant
+  // relative-space classifier (Task 1), not by the CCM.
   const observed = PALETTE_4.map((c) => ({
-    r: c.r * 1.25 + 10,
-    g: c.g * 0.8 + 5,
-    b: c.b * 1.1 + 20,
+    r: c.r * 1.25,
+    g: c.g * 0.8,
+    b: c.b * 1.1,
   }));
   const m = fitCcm(observed, [...PALETTE_4]);
   assert.ok(m !== null);
