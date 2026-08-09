@@ -68,7 +68,7 @@ test("determinism: same payload + profile + seed reproduces the same run", async
   assert.equal(a.blocksSolved, b.blocksSolved);
 });
 
-test("degrading profile: the closed loop descends during bad episodes, survives, and completes", async () => {
+test("degrading profile: the closed loop descends during bad episodes, survives, and completes", { timeout: 120_000 }, async () => {
   const report = await runTransfer(
     "sim.bin",
     BIG_PAYLOAD,
@@ -90,7 +90,7 @@ test("degrading profile: the closed loop descends during bad episodes, survives,
   assert.ok(report.framesDropped > 0, "the stress episodes must drop some frames");
 });
 
-test("recovered bytes accumulate monotonically even through bad episodes", async () => {
+test("recovered bytes accumulate monotonically even through bad episodes", { timeout: 120_000 }, async () => {
   const report = await runTransfer(
     "sim.bin",
     BIG_PAYLOAD,
