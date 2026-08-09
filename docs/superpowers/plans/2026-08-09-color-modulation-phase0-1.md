@@ -1404,15 +1404,36 @@ test("noise perturbs but the channel stays seeded-deterministic", () => {
 });
 
 test("corruptSamples jitters cells and flags blend cells", () => {
-  const opts = { ...CLEAN, cellJitter: 10, blendFraction: 0.1 };
+  // blendFraction 0.25 over 4 cells forces nBlend = floor(4·0.25) = 1, so the
+  // blend branch actually executes (0.1 would round to 0 and only the jitter
+  // path would run — the blend→erasure mechanism would be untested).
+  const opts = { ...CLEAN, cellJitter: 10, blendFraction: 0.25 };
   const samples = PALETTE_4.slice();
   const expected = PALETTE_4.slice();
   const { samples: out, blends } = corruptSamples(samples, expected, opts, mulberry32(3));
   assert.equal(out.length, 4);
   assert.equal(blends.length, 4);
-  const blendCount = blends.filter(Boolean).length;
-  assert.ok(blendCount >= 0 && blendCount <= 1, "about 10% of 4 cells");
+  const blendIdx = blends.findIndex(Boolean);
+  assert.ok(blendIdx >= 0, "blendFraction 0.25 over 4 cells must flag a blend cell");
+  // The flagged cell sits at the midpoint of SOME palette pair (midpoint ±
+  // jitter). Searching all pairs keeps the assertion seed-independent.
+  let nearMidpoint = false;
+  for (let a = 0; a < 4 && !nearMidpoint; a++) {
+    for (let b = a + 1; b < 4 && !nearMidpoint; b++) {
+      const mid = {
+        r: (expected[a]!.r + expected[b]!.r) / 2,
+        g: (expected[a]!.g + expected[b]!.g) / 2,
+        b: (expected[a]!.b + expected[b]!.b) / 2,
+      };
+      nearMidpoint =
+        Math.abs(out[blendIdx]!.r - mid.r) <= 12 &&
+        Math.abs(out[blendIdx]!.g - mid.g) <= 12 &&
+        Math.abs(out[blendIdx]!.b - mid.b) <= 12;
+    }
+  }
+  assert.ok(nearMidpoint, "blend cell sits at a palette midpoint");
   for (let i = 0; i < out.length; i++) {
+    if (blends[i]) continue;
     assert.ok(Math.abs(out[i]!.r - samples[i]!.r) <= 12, "jitter bounded");
   }
 });
@@ -2119,15 +2140,19 @@ Expected: FAIL — `Cannot find module '../color/sim.ts'`.
 // model (~1 Hz, delayed, lossy, averaged) feeds the adaptive policy; the
 // policy changes settings; aggregate goodput and survival come out.
 
-import { HEADER_LEN, fnv1a, packFile, packFrame, parseFrame, streamIdentity, unpackFile, verifyFile } from "../shared/protocol.ts";
-import { LTDecoder, LTEncoder } from "../shared/fountain.ts";
-import { calibrationColor, decodeFrame, encodeFrame } from "./format.ts";
-import { rasterizeGrid } from "./raster.ts";
-import { sampleGrid } from "./sample.ts";
-import { channelAt, corruptRaster, corruptSamples, dropMask, mulberry32, type ChannelOpts, type Profile, type Rng } from "./sim-channel.ts";
-import { LADDER, adaptiveSettings, type AdaptiveParams, type Telemetry, type TxSettings } from "./adaptive.ts";
-import { paletteColor, paletteFor, type RGB } from "./palette.ts";
-import { colorGridSize } from "../shared/frame-capacity.ts";
+// Implementation files import WITHOUT .ts extensions (repo convention; the
+// tsconfig has moduleResolution "bundler" and no allowImportingTsExtensions,
+// so .ts-extension imports would fail TS5097 once Task 10 adds color/ to the
+// include set). Test files keep .ts extensions.
+import { HEADER_LEN, fnv1a, packFile, packFrame, parseFrame, streamIdentity, unpackFile, verifyFile } from "../shared/protocol";
+import { LTDecoder, LTEncoder } from "../shared/fountain";
+import { calibrationColor, decodeFrame, encodeFrame } from "./format";
+import { rasterizeGrid } from "./raster";
+import { sampleGrid } from "./sample";
+import { channelAt, corruptRaster, corruptSamples, dropMask, mulberry32, type ChannelOpts, type Profile, type Rng } from "./sim-channel";
+import { LADDER, adaptiveSettings, type AdaptiveParams, type Telemetry, type TxSettings } from "./adaptive";
+import { paletteColor, paletteFor, type RGB } from "./palette";
+import { colorGridSize } from "../shared/frame-capacity";
 
 export interface ReverseOpts {
   /** Frames between reverse-channel updates (60 @60fps ≈ 1 Hz). */
@@ -2625,16 +2650,16 @@ Expected: FAIL — `Cannot find module '../color/sim-cli.ts'`.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { LTEncoder, cycleLength } from "../shared/fountain.ts";
-import { HEADER_LEN, fnv1a, packFile, packFrame } from "../shared/protocol.ts";
-import { colorGridSize } from "../shared/frame-capacity.ts";
-import { LADDER } from "./adaptive.ts";
-import { calibrationColor, encodeFrame } from "./format.ts";
-import { paletteColor, paletteFor } from "./palette.ts";
-import { rasterizeGrid } from "./raster.ts";
-import { encodePng } from "./png.ts";
-import { PROFILES } from "./sim-channel.ts";
-import { runTransfer, type RunReport, type SimConfig } from "./sim.ts";
+import { LTEncoder, cycleLength } from "../shared/fountain";
+import { HEADER_LEN, fnv1a, packFile, packFrame } from "../shared/protocol";
+import { colorGridSize } from "../shared/frame-capacity";
+import { LADDER } from "./adaptive";
+import { encodeFrame } from "./format";
+import { paletteFor } from "./palette";
+import { rasterizeGrid } from "./raster";
+import { encodePng } from "./png";
+import { PROFILES } from "./sim-channel";
+import { runTransfer, type RunReport, type SimConfig } from "./sim";
 
 function usage(): never {
   console.error(
