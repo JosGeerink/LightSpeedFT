@@ -5,6 +5,9 @@
   "license": "AGPL-3.0-or-later",
   "description": "Offline file and text transfer using fountain-coded animated QR codes — screen to camera, no network.",
   "type": "module",
+  "bin": {
+    "sim": "color/sim-cli.ts"
+  },
   "scripts": {
     "dev": "vite",
     "serve": "npm run build && vite preview",
@@ -18,7 +21,9 @@
     "icons": "node --import tsx build/make-icons.ts",
     "benchmark:promote": "node --import tsx build/benchmarks.ts promote",
     "benchmark:readme": "node --import tsx build/benchmarks.ts readme",
-    "test": "node --import tsx --test tests/*.test.ts"
+    "test": "node --import tsx --test tests/*.test.ts",
+    "sim": "bun color/sim-cli.ts",
+    "sim:help": "bun color/sim-cli.ts"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",

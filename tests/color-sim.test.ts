@@ -139,3 +139,24 @@ test("recovered bytes accumulate monotonically even through bad episodes", { tim
   }
   assert.ok(prev > 0, "progress is made even mid-stress");
 });
+
+test("sim-cli encode writes PNG frames plus a manifest", async () => {
+  const { writeSimEncode } = await import("../color/sim-cli.ts");
+  const dir = `${process.cwd()}/.sim-tmp-${Date.now()}`;
+  try {
+    await writeSimEncode("sim.bin", PAYLOAD, dir, { frameBytes: 300, cellPx: 8, sessionId: 0xab, seed: 7, gridMargin: 4 });
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const files = readdirSync(dir).sort();
+    assert.ok(files.some((f) => /^frame-\d{6}\.png$/.test(f)), `PNG frames: ${files.join(",")}`);
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as {
+      sha256: string; frameCount: number; frameBytes: number; cols: number; rows: number;
+    };
+    assert.ok(typeof manifest.sha256 === "string" && manifest.sha256.length === 64);
+    assert.ok(manifest.frameCount > 0);
+    assert.ok(manifest.cols > 0 && manifest.rows > 0);
+  } finally {
+    const { rmSync } = await import("node:fs");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
