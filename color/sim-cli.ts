@@ -102,53 +102,69 @@ function printReport(r: RunReport): void {
 }
 
 function main(): void {
-  const args = process.argv.slice(2);
-  const cmd = args[0];
-  if (cmd === "encode") {
-    const payloadPath = args[1];
-    const outDir = args[2] ?? "sim-frames";
-    if (!payloadPath) usage();
-    const payload = readFileSync(resolve(payloadPath));
-    void writeSimEncode(basename(payloadPath), payload, resolve(outDir), {
-      frameBytes: 600,
-      cellPx: 8,
-      gridMargin: 4,
-      sessionId: 0x1234,
-      seed: 20260809,
-    }).then(() => console.log(`wrote ${cycleLength(Math.ceil(payload.length / (600 - HEADER_LEN)))} frames to ${outDir}`));
-  } else if (cmd === "run") {
-    const payloadPath = args[1];
-    const profileName = args[2];
-    if (!payloadPath || !profileName) usage();
-    const profile = PROFILES[profileName];
-    if (!profile) usage();
-    let seed = 20260809;
-    let outDir: string | null = null;
-    for (let i = 3; i < args.length; i++) {
-      if (args[i] === "--seed") seed = Number(args[i + 1]);
-      else if (args[i] === "--out") outDir = args[i + 1] ?? null;
-    }
-    const payload = readFileSync(resolve(payloadPath));
-    const cfg: SimConfig = {
-      frameBytes: 600,
-      cellPx: 8,
-      gridMargin: 4,
-      sessionId: 0x1234,
-      seed,
-      maxFrames: 800,
-      adaptive: { holdFrames: 60, upEVM: 0.12, upCorrected: 2, downEVM: 0.3, downDropRate: 0.1 },
-      reverse: { updateEvery: 60, latencyFrames: 90, lossRate: 0.1 },
-    };
-    void (async () => {
-      const report = await runTransfer(basename(payloadPath), payload, profile, cfg);
-      printReport(report);
-      if (outDir) {
-        mkdirSync(outDir, { recursive: true });
-        writeFileSync(join(resolve(outDir), "report.json"), JSON.stringify(report, null, 2));
+  try {
+    const args = process.argv.slice(2);
+    const cmd = args[0];
+    if (cmd === "encode") {
+      const payloadPath = args[1];
+      const outDir = args[2] ?? "sim-frames";
+      if (!payloadPath) usage();
+      const payload = readFileSync(resolve(payloadPath));
+      void writeSimEncode(basename(payloadPath), payload, resolve(outDir), {
+        frameBytes: 600,
+        cellPx: 8,
+        gridMargin: 4,
+        sessionId: 0x1234,
+        seed: 20260809,
+      })
+        .then(() => console.log(`wrote ${cycleLength(Math.ceil(payload.length / (600 - HEADER_LEN)))} frames to ${outDir}`))
+        .catch((err: unknown) => {
+          console.error(`sim encode failed: ${err instanceof Error ? err.message : String(err)}`);
+          process.exit(1);
+        });
+    } else if (cmd === "run") {
+      const payloadPath = args[1];
+      const profileName = args[2];
+      if (!payloadPath || !profileName) usage();
+      const profile = PROFILES[profileName];
+      if (!profile) usage();
+      let seed = 20260809;
+      let outDir: string | null = null;
+      for (let i = 3; i < args.length; i++) {
+        if (args[i] === "--seed") {
+          const v = Number(args[i + 1]);
+          if (!Number.isFinite(v)) usage();
+          seed = v;
+        } else if (args[i] === "--out") outDir = args[i + 1] ?? null;
       }
-    })();
-  } else {
-    usage();
+      const payload = readFileSync(resolve(payloadPath));
+      const cfg: SimConfig = {
+        frameBytes: 600,
+        cellPx: 8,
+        gridMargin: 4,
+        sessionId: 0x1234,
+        seed,
+        maxFrames: 800,
+        adaptive: { holdFrames: 60, upEVM: 0.12, upCorrected: 2, downEVM: 0.3, downDropRate: 0.1 },
+        reverse: { updateEvery: 60, latencyFrames: 90, lossRate: 0.1 },
+      };
+      void (async () => {
+        const report = await runTransfer(basename(payloadPath), payload, profile, cfg);
+        printReport(report);
+        if (outDir) {
+          mkdirSync(outDir, { recursive: true });
+          writeFileSync(join(resolve(outDir), "report.json"), JSON.stringify(report, null, 2));
+        }
+      })().catch((err: unknown) => {
+        console.error(`sim run failed: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      });
+    } else {
+      usage();
+    }
+  } catch (err) {
+    console.error(`sim failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
   }
 }
 

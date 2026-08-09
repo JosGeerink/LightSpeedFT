@@ -52,6 +52,13 @@ test("noise perturbs but the channel stays seeded-deterministic", () => {
   assert.deepEqual(Array.from(a.pixels), Array.from(b.pixels));
 });
 
+test("corruptRaster rounds fractional blur radii to the integer kernel", () => {
+  const r = rasterizeGrid(makeGrid(), PALETTE_4, 8, 4);
+  const a = corruptRaster(r, { ...CLEAN, blurRadius: 1.3 }, mulberry32(1));
+  const b = corruptRaster(r, { ...CLEAN, blurRadius: 1 }, mulberry32(1));
+  assert.deepEqual(Array.from(a.pixels), Array.from(b.pixels));
+});
+
 test("corruptSamples jitters cells and flags blend cells", () => {
   // blendFraction 0.25 over 4 cells forces nBlend = floor(4·0.25) = 1, so the
   // blend branch actually executes (0.1 would round to 0 and only the jitter

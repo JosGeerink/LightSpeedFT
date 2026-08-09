@@ -80,7 +80,9 @@ export function corruptRaster(raster: Raster, opts: ChannelOpts, rng: Rng): Rast
     opts.brightness === 1 && opts.tint[0] === 0 && opts.tint[1] === 0 && opts.tint[2] === 0 &&
     opts.gamma === 1 && opts.noise === 0 && opts.blurRadius === 0 && opts.vignette === 0
   ) {
-    return raster;
+    // Fresh copy, never the input reference: callers may mutate what they get
+    // back, and corruptRaster's contract is "never mutates the input raster".
+    return { width: raster.width, height: raster.height, pixels: new Uint32Array(raster.pixels) };
   }
   let src = raster.pixels;
   if (opts.blurRadius > 0) src = gaussianBlur(src, raster.width, raster.height, opts.blurRadius);
@@ -117,6 +119,10 @@ export function corruptRaster(raster: Raster, opts: ChannelOpts, rng: Rng): Rast
 }
 
 function gaussianBlur(src: Uint32Array, w: number, h: number, radius: number): Uint32Array {
+  // channelAt lerps profiles over time, so radius arrives fractional. A float
+  // kernel size (2·radius+1) would floor in Float64Array and offset the taps —
+  // round to a whole radius so the kernel is symmetric and well-defined.
+  const r = Math.round(radius);
   const n = w * h;
   const R = new Float64Array(n);
   const G = new Float64Array(n);
@@ -127,13 +133,13 @@ function gaussianBlur(src: Uint32Array, w: number, h: number, radius: number): U
     G[i] = (v >>> 8) & 0xff;
     B[i] = (v >>> 16) & 0xff;
   }
-  const sigma = Math.max(1, radius / 2);
-  const size = 2 * radius + 1;
+  const sigma = Math.max(1, r / 2);
+  const size = 2 * r + 1;
   const kernel = new Float64Array(size);
   let sum = 0;
-  for (let i = -radius; i <= radius; i++) {
+  for (let i = -r; i <= r; i++) {
     const wgt = Math.exp(-(i * i) / (2 * sigma * sigma));
-    kernel[i + radius] = wgt;
+    kernel[i + r] = wgt;
     sum += wgt;
   }
   for (let i = 0; i < size; i++) kernel[i] = kernel[i]! / sum;
@@ -142,9 +148,9 @@ function gaussianBlur(src: Uint32Array, w: number, h: number, radius: number): U
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         let acc = 0;
-        for (let i = -radius; i <= radius; i++) {
+        for (let i = -r; i <= r; i++) {
           const xx = Math.min(w - 1, Math.max(0, x + i));
-          acc += plane[y * w + xx]! * kernel[i + radius]!;
+          acc += plane[y * w + xx]! * kernel[i + r]!;
         }
         tmp[y * w + x] = acc;
       }
@@ -153,9 +159,9 @@ function gaussianBlur(src: Uint32Array, w: number, h: number, radius: number): U
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         let acc = 0;
-        for (let i = -radius; i <= radius; i++) {
+        for (let i = -r; i <= r; i++) {
           const yy = Math.min(h - 1, Math.max(0, y + i));
-          acc += tmp[yy * w + x]! * kernel[i + radius]!;
+          acc += tmp[yy * w + x]! * kernel[i + r]!;
         }
         out[y * w + x] = acc;
       }
