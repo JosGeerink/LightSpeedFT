@@ -1381,6 +1381,17 @@ test("CLEAN corruptRaster is a no-op (same pixels, same order)", () => {
   assert.deepEqual(Array.from(out.pixels), Array.from(r.pixels));
 });
 
+test("corruptRaster rounds fractional blur radii to the integer kernel", () => {
+  // channelAt lerps profiles over time, so blurRadius arrives fractional (e.g.
+  // 1.3); gaussianBlur rounds it to a whole radius. A fractional kernel would
+  // yield NaN pixels → NaN EVM, so 1.3 must blur identically to 1. This FAILED
+  // before the rounding fix (1.3 produced a different, NaN-tainted kernel).
+  const r = rasterizeGrid(makeGrid(), PALETTE_4, 8, 4);
+  const a = corruptRaster(r, { ...CLEAN, blurRadius: 1.3 }, mulberry32(1));
+  const b = corruptRaster(r, { ...CLEAN, blurRadius: 1 }, mulberry32(1));
+  assert.deepEqual(Array.from(a.pixels), Array.from(b.pixels));
+});
+
 test("brightness dimming darkens every pixel", () => {
   const r = rasterizeGrid(makeGrid(), PALETTE_4, 8, 4);
   const out = corruptRaster(r, { ...CLEAN, brightness: 0.5 }, mulberry32(1));
@@ -1566,7 +1577,9 @@ export function corruptRaster(raster: Raster, opts: ChannelOpts, rng: Rng): Rast
     opts.brightness === 1 && opts.tint[0] === 0 && opts.tint[1] === 0 && opts.tint[2] === 0 &&
     opts.gamma === 1 && opts.noise === 0 && opts.blurRadius === 0 && opts.vignette === 0
   ) {
-    return raster;
+    // Never return the input reference: a caller mutating what it gets back
+    // would corrupt its own raster. Return a fresh copy with identical pixels.
+    return { width: raster.width, height: raster.height, pixels: new Uint32Array(raster.pixels) };
   }
   let src = raster.pixels;
   if (opts.blurRadius > 0) src = gaussianBlur(src, raster.width, raster.height, opts.blurRadius);
@@ -1603,6 +1616,12 @@ export function corruptRaster(raster: Raster, opts: ChannelOpts, rng: Rng): Rast
 }
 
 function gaussianBlur(src: Uint32Array, w: number, h: number, radius: number): Uint32Array {
+  // channelAt lerps profiles over time, so radius arrives fractional (e.g. 1.3).
+  // A float kernel size (2·radius+1) would floor in Float64Array and index taps
+  // at fractional offsets — `kernel[i + radius]` then reads undefined → NaN
+  // pixels → NaN EVM that silently misdrives the adaptive policy. Round to a
+  // whole radius so the kernel is symmetric and well-defined.
+  const r = Math.round(radius);
   const n = w * h;
   const R = new Float64Array(n);
   const G = new Float64Array(n);
@@ -1613,13 +1632,13 @@ function gaussianBlur(src: Uint32Array, w: number, h: number, radius: number): U
     G[i] = (v >>> 8) & 0xff;
     B[i] = (v >>> 16) & 0xff;
   }
-  const sigma = Math.max(1, radius / 2);
-  const size = 2 * radius + 1;
+  const sigma = Math.max(1, r / 2);
+  const size = 2 * r + 1;
   const kernel = new Float64Array(size);
   let sum = 0;
-  for (let i = -radius; i <= radius; i++) {
+  for (let i = -r; i <= r; i++) {
     const wgt = Math.exp(-(i * i) / (2 * sigma * sigma));
-    kernel[i + radius] = wgt;
+    kernel[i + r] = wgt;
     sum += wgt;
   }
   for (let i = 0; i < size; i++) kernel[i] = kernel[i]! / sum;
@@ -1628,9 +1647,9 @@ function gaussianBlur(src: Uint32Array, w: number, h: number, radius: number): U
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         let acc = 0;
-        for (let i = -radius; i <= radius; i++) {
+        for (let i = -r; i <= r; i++) {
           const xx = Math.min(w - 1, Math.max(0, x + i));
-          acc += plane[y * w + xx]! * kernel[i + radius]!;
+          acc += plane[y * w + xx]! * kernel[i + r]!;
         }
         tmp[y * w + x] = acc;
       }
@@ -1639,9 +1658,9 @@ function gaussianBlur(src: Uint32Array, w: number, h: number, radius: number): U
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         let acc = 0;
-        for (let i = -radius; i <= radius; i++) {
+        for (let i = -r; i <= r; i++) {
           const yy = Math.min(h - 1, Math.max(0, y + i));
-          acc += tmp[yy * w + x]! * kernel[i + radius]!;
+          acc += tmp[yy * w + x]! * kernel[i + r]!;
         }
         out[y * w + x] = acc;
       }
@@ -2852,54 +2871,77 @@ function printReport(r: RunReport): void {
 }
 
 function main(): void {
-  const args = process.argv.slice(2);
-  const cmd = args[0];
-  if (cmd === "encode") {
-    const payloadPath = args[1];
-    const outDir = args[2] ?? "sim-frames";
-    if (!payloadPath) usage();
-    const payload = readFileSync(resolve(payloadPath));
-    void writeSimEncode(basename(payloadPath), payload, resolve(outDir), {
-      frameBytes: 600,
-      cellPx: 8,
-      gridMargin: 4,
-      sessionId: 0x1234,
-      seed: 20260809,
-    }).then(() => console.log(`wrote ${cycleLength(Math.ceil(payload.length / (600 - HEADER_LEN)))} frames to ${outDir}`));
-  } else if (cmd === "run") {
-    const payloadPath = args[1];
-    const profileName = args[2];
-    if (!payloadPath || !profileName) usage();
-    const profile = PROFILES[profileName];
-    if (!profile) usage();
-    let seed = 20260809;
-    let outDir: string | null = null;
-    for (let i = 3; i < args.length; i++) {
-      if (args[i] === "--seed") seed = Number(args[i + 1]);
-      // ?? null: args[i+1] is string | undefined under noUncheckedIndexedAccess.
-      else if (args[i] === "--out") outDir = args[i + 1] ?? null;
-    }
-    const payload = readFileSync(resolve(payloadPath));
-    const cfg: SimConfig = {
-      frameBytes: 600,
-      cellPx: 8,
-      gridMargin: 4,
-      sessionId: 0x1234,
-      seed,
-      maxFrames: 800,
-      adaptive: { holdFrames: 60, upEVM: 0.12, upCorrected: 2, downEVM: 0.3, downDropRate: 0.1 },
-      reverse: { updateEvery: 60, latencyFrames: 90, lossRate: 0.1 },
-    };
-    void (async () => {
-      const report = await runTransfer(basename(payloadPath), payload, profile, cfg);
-      printReport(report);
-      if (outDir) {
-        mkdirSync(outDir, { recursive: true });
-        writeFileSync(join(resolve(outDir), "report.json"), JSON.stringify(report, null, 2));
+  // try/catch + .catch on both async chains: a missing payload file throws a
+  // sync readFileSync, and a rejected runTransfer/writeSimEncode is otherwise
+  // an unhandled promise rejection — both would dump a raw stack trace. usage()
+  // (exit 2) exits inside the try before returning, so it is unaffected.
+  try {
+    const args = process.argv.slice(2);
+    const cmd = args[0];
+    if (cmd === "encode") {
+      const payloadPath = args[1];
+      const outDir = args[2] ?? "sim-frames";
+      if (!payloadPath) usage();
+      const payload = readFileSync(resolve(payloadPath));
+      void writeSimEncode(basename(payloadPath), payload, resolve(outDir), {
+        frameBytes: 600,
+        cellPx: 8,
+        gridMargin: 4,
+        sessionId: 0x1234,
+        seed: 20260809,
+      })
+        .then(() => console.log(`wrote ${cycleLength(Math.ceil(payload.length / (600 - HEADER_LEN)))} frames to ${outDir}`))
+        .catch((err) => {
+          console.error(`sim encode failed: ${err instanceof Error ? err.message : String(err)}`);
+          process.exit(1);
+        });
+    } else if (cmd === "run") {
+      const payloadPath = args[1];
+      const profileName = args[2];
+      if (!payloadPath || !profileName) usage();
+      const profile = PROFILES[profileName];
+      if (!profile) usage();
+      let seed = 20260809;
+      let outDir: string | null = null;
+      for (let i = 3; i < args.length; i++) {
+        // Reject NaN seeds: mulberry32(NaN) would silently break the determinism
+        // guarantee (a given payload+profile+seed must reproduce exactly).
+        if (args[i] === "--seed") {
+          const v = Number(args[i + 1]);
+          if (!Number.isFinite(v)) usage();
+          seed = v;
+        }
+        // ?? null: args[i+1] is string | undefined under noUncheckedIndexedAccess.
+        else if (args[i] === "--out") outDir = args[i + 1] ?? null;
       }
-    })();
-  } else {
-    usage();
+      const payload = readFileSync(resolve(payloadPath));
+      const cfg: SimConfig = {
+        frameBytes: 600,
+        cellPx: 8,
+        gridMargin: 4,
+        sessionId: 0x1234,
+        seed,
+        maxFrames: 800,
+        adaptive: { holdFrames: 60, upEVM: 0.12, upCorrected: 2, downEVM: 0.3, downDropRate: 0.1 },
+        reverse: { updateEvery: 60, latencyFrames: 90, lossRate: 0.1 },
+      };
+      void (async () => {
+        const report = await runTransfer(basename(payloadPath), payload, profile, cfg);
+        printReport(report);
+        if (outDir) {
+          mkdirSync(outDir, { recursive: true });
+          writeFileSync(join(resolve(outDir), "report.json"), JSON.stringify(report, null, 2));
+        }
+      })().catch((err) => {
+        console.error(`sim run failed: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      });
+    } else {
+      usage();
+    }
+  } catch (err) {
+    console.error(`sim failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
   }
 }
 
