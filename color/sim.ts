@@ -82,14 +82,24 @@ export function reverseTelemetry(
   const start = Math.max(0, local.length - opts.latencyFrames);
   const win = local.slice(start);
   if (win.length === 0) return null;
+  const frameDropRate = win.filter((v) => v.dropped).length / win.length;
+  // A dropped frame yields NO measurement — the receiver never saw it.
+  // Averaging its fabricated telemetry in would drag the vote toward
+  // "clean" during drop-heavy episodes (idealizing the reverse channel).
+  // Average only actually-received frames; when none were received, report
+  // the worst case so the policy descends on the drop signal.
+  const received = win.filter((v) => !v.dropped);
+  if (received.length === 0) {
+    return { evm: 1, rsCorrectedBytes: 0, blends: 0, calibrationOk: false, frameDropRate };
+  }
   const mean = (key: "evm" | "rsCorrectedBytes" | "blends") =>
-    win.reduce((acc, v) => acc + v[key], 0) / win.length;
+    received.reduce((acc, v) => acc + v[key], 0) / received.length;
   return {
     evm: mean("evm"),
     rsCorrectedBytes: mean("rsCorrectedBytes"),
     blends: mean("blends"),
-    calibrationOk: win.every((v) => v.calibrationOk),
-    frameDropRate: win.filter((v) => v.dropped).length / win.length,
+    calibrationOk: received.every((v) => v.calibrationOk),
+    frameDropRate,
   };
 }
 

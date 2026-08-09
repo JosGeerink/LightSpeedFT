@@ -52,6 +52,40 @@ test("reverseTelemetry only delivers on the update cadence, with latency and los
   assert.ok(deliveries >= 0 && deliveries <= 3, `got ${deliveries}`);
 });
 
+test("reverseTelemetry averages only actually-received frames (drops never idealize the vote)", () => {
+  const rng = mulberry32(2);
+  const opts = { updateEvery: 1, latencyFrames: 100, lossRate: 0 };
+  // 3 mediocre received frames interleaved with a dropped frame whose
+  // fabricated 0.0 EVM would (if averaged in) drag the mean toward
+  // "perfect" — it must be excluded from the delivered vote.
+  const local: (Telemetry & { dropped: boolean })[] = [
+    { evm: 0.5, rsCorrectedBytes: 3, blends: 1, calibrationOk: false, frameDropRate: 0, dropped: false },
+    { evm: 0.0, rsCorrectedBytes: 0, blends: 0, calibrationOk: true, frameDropRate: 0, dropped: true },
+    { evm: 0.5, rsCorrectedBytes: 3, blends: 1, calibrationOk: false, frameDropRate: 0, dropped: false },
+    { evm: 0.5, rsCorrectedBytes: 3, blends: 1, calibrationOk: false, frameDropRate: 0, dropped: false },
+  ];
+  const v = reverseTelemetry(local, 3, opts, rng);
+  assert.ok(v !== null);
+  assert.ok(Math.abs(v.evm - 0.5) < 1e-9, `dropped 0.0 must not dilute the mean: ${v.evm}`);
+  assert.equal(v.rsCorrectedBytes, 3);
+  assert.equal(v.blends, 1);
+  assert.equal(v.calibrationOk, false);
+  assert.equal(v.frameDropRate, 0.25, "frameDropRate still reports the honest drop fraction");
+});
+
+test("reverseTelemetry reports the worst case when the whole window was dropped", () => {
+  const rng = mulberry32(3);
+  const opts = { updateEvery: 1, latencyFrames: 100, lossRate: 0 };
+  const local: (Telemetry & { dropped: boolean })[] = Array.from({ length: 5 }, () => ({
+    evm: 0.05, rsCorrectedBytes: 0, blends: 0, calibrationOk: true, frameDropRate: 0, dropped: true,
+  }));
+  const v = reverseTelemetry(local, 4, opts, rng);
+  assert.ok(v !== null);
+  assert.equal(v.frameDropRate, 1);
+  assert.equal(v.calibrationOk, false);
+  assert.ok(v.evm >= 1, "no received frames → worst-case EVM, not a fabricated measurement");
+});
+
 test("clean channel: a small payload transfers fully and verifies (SHA-256)", async () => {
   const report = await runTransfer("sim.bin", PAYLOAD, PROFILES.clean!, cfg({ maxFrames: 200 }));
   assert.equal(report.complete, true, "clean channel must complete");
