@@ -2123,7 +2123,7 @@ test("recovered bytes accumulate monotonically even through bad episodes", async
 });
 ```
 
-(Add `mulberry32` and the `Telemetry` type to the test's imports: `import { mulberry32 } from "../color/sim-channel.ts"; import type { Telemetry } from "../color/adaptive.ts";`.)
+(The test's import block above already includes `mulberry32` and `type Telemetry` — no additional imports are needed.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
