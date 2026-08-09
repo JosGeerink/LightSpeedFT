@@ -778,7 +778,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { colorGridSize, colorMaxFrameBytes, colorDataCells } from "../shared/frame-capacity.ts";
 import { encodeFrame, decodeFrame, calibrationColor, isCalibration } from "../color/format.ts";
-import { PALETTE_4, paletteColor } from "../color/palette.ts";
+import { PALETTE_4, PALETTE_8, paletteColor } from "../color/palette.ts";
 
 test("capacity math: perimeter is calibration, interior is data", () => {
   assert.equal(colorDataCells(10, 10), 64);
