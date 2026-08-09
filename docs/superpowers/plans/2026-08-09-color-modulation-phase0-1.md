@@ -837,12 +837,17 @@ test("a few corrupted data samples are repaired by RS", () => {
   const samples = grid.cells.map((v, i) =>
     v === null ? calibrationColor(PALETTE_4, i) : paletteColor(PALETTE_4, v),
   );
-  // Corrupt 10 data cells (each cell is 2 bits → up to 2 bytes of RS damage).
+  // Corrupt 10 data cells by explicitly cycling each to the next palette
+  // symbol — a guaranteed symbol flip. (A small additive shift like +40 on r
+  // does NOT flip any 2-bit symbol: the palette channels are 255 apart, and
+  // classifySample still lands on the true symbol in relative space, so RS
+  // would report zero corrections and the `rsCorrectedBytes > 0` assertion
+  // would fail. Verified against the Task 1 classifier.)
   let corrupted = 0;
   for (let i = 0; i < samples.length && corrupted < 10; i++) {
     if (isCalibration(48, 48, i)) continue;
-    const p = samples[i]!;
-    samples[i] = { r: Math.min(255, p.r + 40), g: p.g, b: p.b };
+    const v = grid.cells[i]!;
+    samples[i] = paletteColor(PALETTE_4, (v + 1) % PALETTE_4.length);
     corrupted++;
   }
   const dec = decodeFrame(samples, frameBytes.length, { cols: 48, rows: 48, bitsPerCell: 2, nsym: 51 });
