@@ -2707,7 +2707,7 @@ The `bun sim` CLI and the wiring that makes the whole thing runnable and type-ch
 - Produces:
   - CLI:
     - `bun run sim -- encode <payloadPath> [outDir]` → writes `frame-000000.png …`, `manifest.json` (one carousel cycle of clean frames)
-    - `bun run sim -- run <payloadPath> <profile> [--seed N] [--out dir]` → prints a summary, writes `report.json` and (with `--out`) sampled corrupted PNGs
+    - `bun run sim -- run <payloadPath> <profile> [--seed N] [--out dir]` → prints a summary, writes `report.json` (or, with `--out`, into that directory)
   - package.json: `"sim": "bun color/sim-cli.ts"`, `"bin": { "sim": "color/sim-cli.ts" }`
 
 - [ ] **Step 1: Write the failing test (appended to `tests/color-sim.test.ts`)**
@@ -2815,7 +2815,11 @@ export async function writeSimEncode(
     writeFileSync(join(outDir, name), encodePng(raster));
   }
   // SHA-256 of the payload for the manifest (receiver-side verification anchor).
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", payload));
+  // Uint8Array.from(payload): crypto.subtle.digest wants a BufferSource, and a
+  // bare Uint8Array<ArrayBufferLike> parameter trips strict (TS errors on the
+  // generic mismatch). Same pattern as shared/protocol.ts's private digest().
+  const stablePayload = Uint8Array.from(payload);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", stablePayload));
   const sha256 = [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
   writeFileSync(
     join(outDir, "manifest.json"),
@@ -2825,10 +2829,6 @@ export async function writeSimEncode(
       2,
     ),
   );
-}
-
-function hex(bytes: Uint8Array): string {
-  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function printReport(r: RunReport): void {
@@ -2876,7 +2876,8 @@ function main(): void {
     let outDir: string | null = null;
     for (let i = 3; i < args.length; i++) {
       if (args[i] === "--seed") seed = Number(args[i + 1]);
-      else if (args[i] === "--out") outDir = args[i + 1];
+      // ?? null: args[i+1] is string | undefined under noUncheckedIndexedAccess.
+      else if (args[i] === "--out") outDir = args[i + 1] ?? null;
     }
     const payload = readFileSync(resolve(payloadPath));
     const cfg: SimConfig = {
@@ -2947,8 +2948,8 @@ Expected: build succeeds.
 
 - [ ] **Step 5: Manual smoke of both CLI surfaces**
 
-Run: `bun run sim -- encode <(echo "hello from the sim") /tmp/sim-frames` (or any small file), then list `/tmp/sim-frames` — PNG frames + `manifest.json` must appear.
-Run: `bun run sim -- run <(echo "hello from the sim") clean --seed 1` — a summary line must print; then the same with `degrading`.
+Run: `bun run sim -- encode /tmp/sim-hello.txt /tmp/sim-frames` (write a small `echo "hello from the sim" > /tmp/sim-hello.txt` first — shell process substitution `<(...)` does NOT work under bun: the fd is not inherited, `readFileSync` gets EBADF), then list `/tmp/sim-frames` — PNG frames + `manifest.json` must appear.
+Run: `bun run sim -- run /tmp/sim-hello.txt clean --seed 1` — a summary line must print; then the same with `degrading`.
 Expected: encode writes files; run prints a report; `clean` completes with `verify: ok`.
 
 - [ ] **Step 6: Commit**
