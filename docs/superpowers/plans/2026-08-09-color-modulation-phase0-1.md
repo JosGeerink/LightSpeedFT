@@ -2480,6 +2480,27 @@ test("a real color frame survives a PNG file round-trip", () => {
   assert.equal(back.height, raster.height);
   assert.deepEqual(Array.from(back.pixels), Array.from(raster.pixels));
 });
+
+test("encodePng IDAT is zlib-wrapped, decodable by a spec-conformant inflater", async () => {
+  // Bun's own inflateSync is raw-deflate and would mask a raw IDAT, so this
+  // regression uses node:zlib — the exact inflate libpng uses — to prove the
+  // written PNG is a real PNG (RFC 1950 zlib), not just self-consistent.
+  const r = { width: 4, height: 4, pixels: new Uint32Array(16).fill(0xff0000ff) };
+  const png = encodePng(r);
+  const dv = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  let off = 8;
+  let idat: Uint8Array | null = null;
+  while (off + 12 <= png.length) {
+    const len = dv.getUint32(off);
+    const type = new TextDecoder().decode(png.subarray(off + 4, off + 8));
+    if (type === "IDAT") idat = png.subarray(off + 8, off + 8 + len);
+    off += 12 + len;
+  }
+  assert.ok(idat !== null, "PNG must contain an IDAT chunk");
+  const { inflateSync } = await import("node:zlib");
+  const raw = inflateSync(idat); // throws if the IDAT is not a zlib stream
+  assert.equal(raw.length, (r.width * 4 + 1) * r.height, "4×4 RGBA + 1 filter byte per row");
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2525,6 +2546,34 @@ function crc32(bytes: Uint8Array): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
+/** Adler-32 (RFC 1950) over the uncompressed scanline data — the trailer
+ *  every PNG IDAT zlib stream must carry. */
+function adler32(bytes: Uint8Array): number {
+  let a = 1;
+  let b = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    a = (a + bytes[i]!) % 65521;
+    b = (b + a) % 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
+/** PNG IDAT must be a zlib stream (RFC 1950): 2-byte header + deflate +
+ *  Adler-32 trailer. Bun's deflateSync emits RAW deflate (RFC 1951) only —
+ *  a raw IDAT is rejected by conformant decoders (libpng/browsers) — so wrap
+ *  it in the zlib envelope here. 0x78 0x9C = deflate, 32K window, default
+ *  compression, no preset dict (0x789C ≡ 0 mod 31, so the FCHECK is valid). */
+function zlibWrap(raw: Uint8Array): Uint8Array {
+  const deflated = deflateSync(raw);
+  const out = new Uint8Array(2 + deflated.length + 4);
+  out[0] = 0x78;
+  out[1] = 0x9c;
+  out.set(deflated, 2);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(2 + deflated.length, adler32(raw));
+  return out;
+}
+
 function chunk(type: string, data: Uint8Array): Uint8Array {
   const typeBytes = new TextEncoder().encode(type);
   const out = new Uint8Array(8 + data.length + 4);
@@ -2565,7 +2614,7 @@ export function encodePng(raster: Raster): Uint8Array {
   }
 
   const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-  const out: Uint8Array[] = [sig, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", new Uint8Array(0))];
+  const out: Uint8Array[] = [sig, chunk("IHDR", ihdr), chunk("IDAT", zlibWrap(raw)), chunk("IEND", new Uint8Array(0))];
   let total = 0;
   for (const part of out) total += part.length;
   const merged = new Uint8Array(total);
@@ -2603,7 +2652,14 @@ export function decodePng(bytes: Uint8Array): Raster {
   }
   if (width === 0 || height === 0 || idat === null) throw new Error("incomplete PNG");
 
-  const raw = inflateSync(idat);
+  // Strip the zlib envelope (2-byte header + 4-byte Adler-32 trailer) before
+  // inflating the raw deflate, and verify the trailer so a corrupt or
+  // non-conformant IDAT fails cleanly instead of decoding to garbage.
+  const raw = inflateSync(idat.subarray(2, idat.length - 4));
+  const idatView = new DataView(idat.buffer, idat.byteOffset, idat.byteLength);
+  if (adler32(raw) !== idatView.getUint32(idat.length - 4)) {
+    throw new Error("PNG IDAT Adler-32 mismatch");
+  }
   const stride = width * 4;
   const pixels = new Uint32Array(width * height);
   for (let y = 0; y < height; y++) {
@@ -2625,7 +2681,7 @@ export function decodePng(bytes: Uint8Array): Raster {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/color-png.test.ts`
-Expected: PASS (all 3 tests).
+Expected: PASS (all 4 tests).
 
 - [ ] **Step 5: Commit**
 
